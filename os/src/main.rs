@@ -1,93 +1,82 @@
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
-use core::panic::PanicInfo;
-use core::fmt::{self, Write};
+mod console;
+mod lang_items;
+mod sbi;
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
-}
+use core::arch::global_asm;
 
-// RISC-V Linux 系统调用编号
-const SYSCALL_EXIT: usize = 93;
-const SYSCALL_WRITE: usize = 64;
+// 引入汇编启动代码
+global_asm!(include_str!("entry.asm"));
 
-// 通用系统调用函数
-fn syscall(id: usize, args: [usize; 3]) -> isize {
-    let mut a0 = args[0];
-
-    unsafe {
-        asm!(
-            "ecall",
-            inlateout("a0") a0,
-            in("a1") args[1],
-            in("a2") args[2],
-            in("a7") id,
-            options(nostack)
-        );
+// 清空 .bss 段
+fn clear_bss() {
+    unsafe extern "C" {
+        fn sbss();
+        fn ebss();
     }
 
-    a0 as isize
+    let start = sbss as *const () as usize;
+    let end = ebss as *const () as usize;
+
+    (start..end).for_each(|a| unsafe {
+        (a as *mut u8).write_volatile(0);
+    });
 }
 
-// 退出系统调用
-pub fn sys_exit(xstate: i32) -> isize {
-    syscall(SYSCALL_EXIT, [xstate as usize, 0, 0])
-}
-
-// 输出系统调用
-pub fn sys_write(fd: usize, buffer: &[u8]) -> isize {
-    syscall(
-        SYSCALL_WRITE,
-        [fd, buffer.as_ptr() as usize, buffer.len()]
-    )
-}
-
-// 实现 Write Trait
-struct Stdout;
-
-impl Write for Stdout {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        let ret = sys_write(1, s.as_bytes());
-        if ret == s.len() as isize {
-            Ok(())
-        } else {
-            Err(fmt::Error)
-        }
-    }
-}
-
-// 封装格式化输出函数
-pub fn print(args: fmt::Arguments<'_>) {
-    let mut stdout = Stdout;
-    stdout.write_fmt(args).unwrap();
-}
-
-// 实现 print! 宏
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => {
-        $crate::print(format_args!($($arg)*))
-    };
-}
-
-// 实现 println! 宏
-#[macro_export]
-macro_rules! println {
-    () => {
-        $crate::print!("\n")
-    };
-    ($fmt:literal $(, $arg:expr)* $(,)?) => {
-        $crate::print!(concat!($fmt, "\n") $(, $arg)*)
-    };
-}
-
-// 程序入口
+// Rust 内核主函数
 #[unsafe(no_mangle)]
-extern "C" fn _start() {
+pub extern "C" fn rust_main() -> ! {
+    unsafe extern "C" {
+        fn stext();
+        fn etext();
+        fn srodata();
+        fn erodata();
+        fn sdata();
+        fn edata();
+        fn sbss();
+        fn ebss();
+        fn boot_stack();
+        fn boot_stack_top();
+    }
+
+    clear_bss();
+
     println!("Hello, world!");
     println!("Student ID: {}", 24301009);
-    sys_exit(9);
+
+    println!(
+        ".text [{:#x}, {:#x})",
+        stext as *const () as usize,
+        etext as *const () as usize
+    );
+
+    println!(
+        ".rodata [{:#x}, {:#x})",
+        srodata as *const () as usize,
+        erodata as *const () as usize
+    );
+
+    println!(
+        ".data [{:#x}, {:#x})",
+        sdata as *const () as usize,
+        edata as *const () as usize
+    );
+
+    println!(
+        "boot_stack [{:#x}, {:#x})",
+        boot_stack as *const () as usize,
+        boot_stack_top as *const () as usize
+    );
+
+    println!(
+        ".bss [{:#x}, {:#x})",
+        sbss as *const () as usize,
+        ebss as *const () as usize
+    );
+
+    println!("Hello, world!");
+
+    panic!("Shutdown machine!");
 }
